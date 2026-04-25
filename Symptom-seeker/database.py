@@ -1,39 +1,65 @@
 import os
 import chromadb
 from chromadb.utils import embedding_functions
+import google.generativeai as genai
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
-# 1. Setup the Gemini Embedding Function
-# This converts text into vectors that the database can search
+# 1. Configure Gemini globally
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# 2. Setup the Embedding Function (WITHOUT the key argument)
 gemini_ef = embedding_functions.GoogleGeminiEmbeddingFunction(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    model_name="models/text-embedding-004"
+    model_name="gemini-embedding-2"
 )
 
-# 2. Initialize the Persistent Client 
-# The 'path' is where the database files will be stored on your disk
+# 3. Initialize the Persistent Client 
 client = chromadb.PersistentClient(path="./chroma_db")
 
-# 3. Get or Create the Collection
-# A collection is like a table in a traditional database
+# 4. Get or Create the Collection
 collection = client.get_or_create_collection(
     name="patient_history", 
     embedding_function=gemini_ef
 )
 
 def save_symptom(user_id, symptom_text):
-    """Saves a symptom to the user's history."""
+    """Saves a symptom with user metadata for filtering."""
+    timestamp = datetime.now().isoformat()
     collection.add(
         documents=[symptom_text],
-        ids=[f"{user_id}_{os.urandom(4).hex()}"] # Create a unique ID
+        # Adding metadata is crucial for multi-user apps
+        metadatas=[{"user_id": user_id, "timestamp": timestamp}], 
+        ids=[f"{user_id}_{os.urandom(4).hex()}"]
     )
 
-def query_history(query_text, n_results=3):
-    """Retrieves the most relevant past symptoms."""
+def query_history(user_id, query_text, n_results=3):
+    """Retrieves symptoms only for the specific user."""
     results = collection.query(
         query_texts=[query_text],
-        n_results=n_results
+        n_results=n_results,
+        # This 'where' clause keeps user data separate
+        where={"user_id": user_id} 
     )
-    return results['documents'][0] if results['documents'] else []
+    
+    if not results['documents'] or not results['documents'][0]:
+        return []
+        
+    formatted_history = []
+    docs = results['documents'][0]
+    # Handle missing metadatas gracefully
+    metadatas = results.get('metadatas')
+    meta_list = metadatas[0] if metadatas and metadatas[0] else [{}] * len(docs)
+    
+    for doc, meta in zip(docs, meta_list):
+        timestamp = meta.get("timestamp", "Unknown date")
+        if timestamp != "Unknown date":
+            try:
+                dt = datetime.fromisoformat(timestamp)
+                timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        formatted_history.append(f"[{timestamp}] {doc}")
+        
+    return formatted_history
