@@ -98,7 +98,8 @@ async def get_triage(data: SymptomInput, current_user_id: str = Depends(get_curr
             "title": "Default Conversation",
             "messages": [],
             "summary": "No summary yet.",
-            "symptoms": []
+            "symptoms": [],
+            "created_at": datetime.now().isoformat()
         }
         active_conversations[current_user_id] = conv_id
         
@@ -142,7 +143,8 @@ async def create_conversation(data: ConversationCreate, current_user_id: str = D
             "title": data.title, # Or "Default Conversation" in the triage route
             "messages": [],
             "summary": "No summary yet.", # NEW
-            "symptoms": []                # NEW
+            "symptoms": [],
+            "created_at": datetime.now().isoformat()
         }
     active_conversations[current_user_id] = conv_id
     return {"conversation_id": conv_id, "title": data.title}
@@ -153,7 +155,7 @@ async def get_conversations(current_user_id: str = Depends(get_current_user)):
     active_id = active_conversations.get(current_user_id)
     return {
         "active_conversation_id": active_id,
-        "conversations": [{"id": cid, "title": c["title"]} for cid, c in user_convs.items()]
+        "conversations": [{"id": cid, "title": c["title"], "created_at": c.get("created_at")} for cid, c in user_convs.items()]
     }
 
 @app.put("/conversations/{conversation_id}/active")
