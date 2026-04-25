@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from database import save_symptom, query_history
 
 # Import the brain from your engine file
-from engine import generate_triage_response, generate_conversation_summary 
+from engine import generate_triage_response, generate_triage_response_ignore_history, generate_conversation_summary
 
 load_dotenv()
 
@@ -72,9 +72,10 @@ class UserInput(BaseModel):
 
 class ConversationCreate(BaseModel):
     title: str
+    isolated: bool = False
 
 users_db = {} 
-# conversations_db format: { user_id: { conversation_id: { "id": str, "title": str, "messages": list } } }
+# conversations_db format: { user_id: { conversation_id: { "id": str, "title": str, "isolated": bool, "messages": list, "summary": str, "symptoms": list, "created_at": str } } }
 conversations_db: Dict[str, Dict[str, dict]] = {}
 # active_conversations format: { user_id: conversation_id }
 active_conversations: Dict[str, str] = {}
@@ -132,6 +133,47 @@ async def get_triage(data: SymptomInput, current_user_id: str = Depends(get_curr
     
     return {"recommendation": ai_advice, "conversation_id": active_id}
 
+
+@app.post("/triage-ignore-history")
+async def get_triage_ignore_history(data: SymptomInput, current_user_id: str = Depends(get_current_user)):
+    # Check for active conversation
+    if current_user_id not in active_conversations:
+        # Create a default conversation
+        conv_id = str(uuid.uuid4())
+        if current_user_id not in conversations_db:
+            conversations_db[current_user_id] = {}
+        conversations_db[current_user_id][conv_id] = {
+            "id": conv_id,
+            "title": "Default Conversation",
+            "messages": []
+        }
+        active_conversations[current_user_id] = conv_id
+        
+    active_id = active_conversations[current_user_id]
+    conversation = conversations_db[current_user_id][active_id]
+
+    # Append user message
+    conversation["messages"].append({
+        "role": "user",
+        "content": data.symptom,
+        "timestamp": datetime.now().isoformat()
+    })
+
+    # 2. Call Gemini with the context of their history
+    ai_advice = await generate_triage_response_ignore_history(data.symptom)
+    
+    # 3. Save the NEW symptom so the DB stays updated
+    save_symptom(current_user_id, data.symptom)
+    
+    # Append AI message
+    conversation["messages"].append({
+        "role": "ai",
+        "content": ai_advice,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"recommendation": ai_advice, "conversation_id": active_id}
+
 @app.post("/conversations")
 async def create_conversation(data: ConversationCreate, current_user_id: str = Depends(get_current_user)):
     conv_id = str(uuid.uuid4())
@@ -141,6 +183,7 @@ async def create_conversation(data: ConversationCreate, current_user_id: str = D
     conversations_db[current_user_id][conv_id] = {
             "id": conv_id,
             "title": data.title, # Or "Default Conversation" in the triage route
+            "isolated": data.isolated,
             "messages": [],
             "summary": "No summary yet.", # NEW
             "symptoms": [],
@@ -155,7 +198,7 @@ async def get_conversations(current_user_id: str = Depends(get_current_user)):
     active_id = active_conversations.get(current_user_id)
     return {
         "active_conversation_id": active_id,
-        "conversations": [{"id": cid, "title": c["title"], "created_at": c.get("created_at")} for cid, c in user_convs.items()]
+        "conversations": [{"id": cid, "title": c["title"], "isolated": c.get("isolated", False), "created_at": c.get("created_at"), "symptoms": c.get("symptoms", []), "recommended_action": c.get("recommended_action", "")} for cid, c in user_convs.items()]
     }
 
 @app.put("/conversations/{conversation_id}/active")
@@ -194,6 +237,8 @@ async def summarize_conversation(conversation_id: str, current_user_id: str = De
     extraction = await generate_conversation_summary(messages)
     
     # 4. Store the results in your dictionary database
+    if "title" in extraction:
+        conversation["title"] = extraction.get("title")
     conversation["summary"] = extraction.get("summary", "")
     conversation["symptoms"] = extraction.get("symptoms", [])
     conversation["recommended_action"] = extraction.get("recommended_action", "No recommended action.") # <-- NEW
@@ -201,6 +246,7 @@ async def summarize_conversation(conversation_id: str, current_user_id: str = De
     return {
         "message": "Conversation summarized successfully",
         "conversation_id": conversation_id,
+        "title": conversation["title"],
         "summary": conversation["summary"],
         "symptoms": conversation["symptoms"],
         "recommended_action": conversation["recommended_action"] # <-- NEW
