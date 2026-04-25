@@ -1,0 +1,12 @@
+# Ignore the virtual environment
+venv/
+
+# Ignore the environment variables (CRITICAL for security)
+.env
+
+# Ignore the local database folder ChromaDB will create
+chroma_db/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
