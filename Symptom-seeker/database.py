@@ -1,24 +1,20 @@
 import os
 import chromadb
 from chromadb.utils import embedding_functions
-import google.generativeai as genai
 from dotenv import load_dotenv
 from datetime import datetime
 
 load_dotenv()
 
-# 1. Configure Gemini globally
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-# 2. Setup the Embedding Function (WITHOUT the key argument)
+# 1. Setup the Embedding Function using the new syntax requirements
 gemini_ef = embedding_functions.GoogleGeminiEmbeddingFunction(
     model_name="gemini-embedding-2"
 )
 
-# 3. Initialize the Persistent Client 
+# 2. Initialize the Persistent Client 
 client = chromadb.PersistentClient(path="./chroma_db")
 
-# 4. Get or Create the Collection
+# 3. Get or Create the Collection
 collection = client.get_or_create_collection(
     name="patient_history", 
     embedding_function=gemini_ef
@@ -29,7 +25,6 @@ def save_symptom(user_id, symptom_text):
     timestamp = datetime.now().isoformat()
     collection.add(
         documents=[symptom_text],
-        # Adding metadata is crucial for multi-user apps
         metadatas=[{"user_id": user_id, "timestamp": timestamp}], 
         ids=[f"{user_id}_{os.urandom(4).hex()}"]
     )
@@ -39,7 +34,6 @@ def query_history(user_id, query_text, n_results=3):
     results = collection.query(
         query_texts=[query_text],
         n_results=n_results,
-        # This 'where' clause keeps user data separate
         where={"user_id": user_id} 
     )
     
@@ -48,7 +42,6 @@ def query_history(user_id, query_text, n_results=3):
         
     formatted_history = []
     docs = results['documents'][0]
-    # Handle missing metadatas gracefully
     metadatas = results.get('metadatas')
     meta_list = metadatas[0] if metadatas and metadatas[0] else [{}] * len(docs)
     

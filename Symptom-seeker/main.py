@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from database import save_symptom, query_history
 
 # Import the brain from your engine file
-from engine import generate_triage_response 
+from engine import generate_triage_response, generate_conversation_summary 
 
 load_dotenv()
 
@@ -96,7 +96,9 @@ async def get_triage(data: SymptomInput, current_user_id: str = Depends(get_curr
         conversations_db[current_user_id][conv_id] = {
             "id": conv_id,
             "title": "Default Conversation",
-            "messages": []
+            "messages": [],
+            "summary": "No summary yet.",
+            "symptoms": []
         }
         active_conversations[current_user_id] = conv_id
         
@@ -136,10 +138,12 @@ async def create_conversation(data: ConversationCreate, current_user_id: str = D
         conversations_db[current_user_id] = {}
         
     conversations_db[current_user_id][conv_id] = {
-        "id": conv_id,
-        "title": data.title,
-        "messages": []
-    }
+            "id": conv_id,
+            "title": data.title, # Or "Default Conversation" in the triage route
+            "messages": [],
+            "summary": "No summary yet.", # NEW
+            "symptoms": []                # NEW
+        }
     active_conversations[current_user_id] = conv_id
     return {"conversation_id": conv_id, "title": data.title}
 
@@ -169,6 +173,37 @@ async def get_conversation(conversation_id: str, current_user_id: str = Depends(
         
     return user_convs[conversation_id]
 
+@app.post("/conversations/{conversation_id}/summarize")
+async def summarize_conversation(conversation_id: str, current_user_id: str = Depends(get_current_user)):
+    user_convs = conversations_db.get(current_user_id, {})
+    
+    # 1. Verify the conversation exists
+    if conversation_id not in user_convs:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+        
+    conversation = user_convs[conversation_id]
+    messages = conversation.get("messages", [])
+    
+    # 2. Prevent summarizing empty chats
+    if not messages:
+        raise HTTPException(status_code=400, detail="Not enough messages to summarize.")
+        
+    # 3. Call the AI engine to generate the data
+    extraction = await generate_conversation_summary(messages)
+    
+    # 4. Store the results in your dictionary database
+    conversation["summary"] = extraction.get("summary", "")
+    conversation["symptoms"] = extraction.get("symptoms", [])
+    conversation["recommended_action"] = extraction.get("recommended_action", "No recommended action.") # <-- NEW
+    
+    return {
+        "message": "Conversation summarized successfully",
+        "conversation_id": conversation_id,
+        "summary": conversation["summary"],
+        "symptoms": conversation["symptoms"],
+        "recommended_action": conversation["recommended_action"] # <-- NEW
+    }
+
 @app.get("/me")
 async def read_users_me(current_user_id: str = Depends(get_current_user)):
     return {"user_id": current_user_id}
@@ -189,6 +224,6 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+        
     token = create_access_token({"sub": form_data.username})
     return {"access_token": token, "token_type": "bearer"}
